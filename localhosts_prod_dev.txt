@@ -1,0 +1,11 @@
+dev
+docker compose --profile dev up -d --build
+docker compose --profile dev down
+http://localhost:3000/login
+
+
+prod
+docker compose --profile prod up -d --build
+docker compose --profile prod down
+http://localhost:8080/login
+

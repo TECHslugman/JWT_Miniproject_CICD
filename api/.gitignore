@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Logs
+logs
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data / caches
+pids
+*.pid
+*.seed
+*.pid.lock
+tmp/
+temp/
+.cache/
+.npm/
+.parcel-cache/
+.eslintcache
+.turbo/
+
+# Tests / coverage
+coverage/
+.nyc_output/
+jest-*/ 
+coverage-final.json
+
+# Build output
+dist/
+build/
+lib/
+
+# Environment files (keep example file tracked)
+.env
+.env.*
+!.env.example
+
+# Local editor / tooling
+.vscode/
+.idea/
+*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# App data you don't want in Git (uncomment if you generate these)
+# uploads/
+# storage/

@@ -1,0 +1,89 @@
+/* App.css */
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f7fa;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  height: 100vh;
+  justify-content: center;
+  align-items: center;
+}
+
+.container {
+  background: #fff;
+  padding: 30px 25px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.1);
+  width: 360px;
+  box-sizing: border-box;
+}
+
+h2 {
+  text-align: center;
+  color: #222;
+  margin-bottom: 25px;
+  font-weight: 600;
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border: 1.5px solid #ccc;
+  border-radius: 6px;
+  font-size: 1rem;
+  transition: border-color 0.3s ease;
+  box-sizing: border-box;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: none;
+  border-color: #2979ff;
+  box-shadow: 0 0 5px rgba(41,121,255,0.5);
+}
+
+button {
+  width: 100%;
+  padding: 12px 0;
+  background-color: #2979ff;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover {
+  background-color: #0046d5;
+}
+
+p.message {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+p.link-text {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 0.95rem;
+  color: #444;
+}
+
+p.link-text a {
+  color: #2979ff;
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+p.link-text a:hover {
+  text-decoration: underline;
+}

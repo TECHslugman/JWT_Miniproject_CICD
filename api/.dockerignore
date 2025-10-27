@@ -1,0 +1,46 @@
+# Dependencies and caches
+node_modules
+.npm/
+.yarn/
+.pnpm-store/
+.eslintcache
+.turbo/
+.cache/
+
+# Build/test output
+dist
+build
+coverage
+.nyc_output
+jest-*
+
+# Logs and temps
+*.log
+logs
+tmp
+temp
+pids
+*.pid
+*.pid.lock
+
+# VCS and metadata
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Env and credentials
+.env
+.env.*
+!.env.example
+
+# Docker/Compose and docs you don’t need in the image
+Dockerfile*
+compose.y*ml
+docker-compose*.yml
+README.md
+LICENSE

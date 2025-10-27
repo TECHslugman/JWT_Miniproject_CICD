@@ -1,0 +1,137 @@
+name: e2e-auth-and-db
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [dev, prod]
+
+    env:
+      JWT_ACCESS_SECRET: test-access-secret
+      JWT_REFRESH_SECRET: test-refresh-secret
+      ACCESS_TOKEN_TTL: 20s
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Write CI env (use CI Mongo)
+        run: |
+          cat > .env << 'EOF'
+          NODE_ENV=production
+          PORT=5000
+          MONGODB_URI=mongodb://root:rootpass@mongo:27017/ci_db?authSource=admin
+          JWT_ACCESS_SECRET=${{ env.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET=${{ env.JWT_REFRESH_SECRET }}
+          ACCESS_TOKEN_TTL=${{ env.ACCESS_TOKEN_TTL }}
+          EOF
+
+      - name: Start stack with Compose
+        run: |
+          if [ "${{ matrix.profile }}" = "dev" ]; then
+            export COMPOSE_PROFILES="dev,ci"
+            BASE="http://localhost:5000"
+          else
+            export COMPOSE_PROFILES="prod,ci"
+            BASE="http://localhost:8080"
+          fi
+          echo "BASE=$BASE" >> $GITHUB_ENV
+          docker compose up -d --build
+
+      - name: Wait for readiness
+        run: |
+          set -e
+          for i in {1..60}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE")
+            if [ "$code" != "000" ]; then break; fi
+            sleep 2
+          done
+
+      - name: Register user (idempotent)
+        run: |
+          curl -i -sS -X POST "$BASE/api/register" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
+
+      - name: Login and capture tokens
+        run: |
+          R=$(curl -sS -X POST "$BASE/api/login" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"ciuser","password":"cipass"}')
+          echo "$R" | jq -e '.accessToken,.refreshToken' > /dev/null
+          AT=$(echo "$R" | jq -r '.accessToken')
+          RT=$(echo "$R" | jq -r '.refreshToken')
+          echo "AT=$AT" >> $GITHUB_ENV
+          echo "RT=$RT" >> $GITHUB_ENV
+
+      - name: Negative login (bad password -> 400)
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/login" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"ciuser","password":"wrong"}')
+          [ "$code" = "400" ]
+
+      - name: Refresh token -> new pair
+        run: |
+          R=$(curl -sS -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"${RT}\"}")
+          echo "$R" | jq -e '.accessToken,.refreshToken' > /dev/null
+          NAT=$(echo "$R" | jq -r '.accessToken')
+          NRT=$(echo "$R" | jq -r '.refreshToken')
+          test "$NAT" != "$AT"
+          test "$NRT" != "$RT"
+          echo "AT=$NAT" >> $GITHUB_ENV
+          echo "RT=$NRT" >> $GITHUB_ENV
+
+      - name: Refresh missing token -> 401
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" -d '{}')
+          [ "$code" = "401" ]
+
+      - name: Refresh invalid token -> 403
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" \
+            -d '{"token":"not-a-real-token"}')
+          [ "$code" = "403" ]
+
+      - name: Logout invalidates prior refresh
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/logout" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"${RT}\"}")
+          [ "$code" = "200" ]
+          code2=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"${RT}\"}")
+          [ "$code2" = "403" ]
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose logs --no-color api || true
+          docker compose logs --no-color client || true
+
+      - name: Teardown
+        if: always()
+        run: |
+          if [ "${{ matrix.profile }}" = "dev" ]; then
+            export COMPOSE_PROFILES="dev,ci"
+          else
+            export COMPOSE_PROFILES="prod,ci"
+          fi
+          docker compose down -v
