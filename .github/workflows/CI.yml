@@ -44,20 +44,34 @@ jobs:
           sudo apt-get install -y jq
           cd api && npm ci
 
-      - name: Start API, wait, run tests, teardown
+      - name: Start API + test + teardown (single step)
         run: |
           set -euo pipefail
           cd api
-          node index.js > ../api.out 2>&1 & echo $! > ../api.pid
+          # run in foreground in a subshell so we can tail logs if it dies
+          ( node --trace-uncaught index.js ) > ../api.out 2>&1 &
+          API_PID=$!
           cd ..
-          # Wait for port 5000 to accept TCP (no healthcheck)
-          for i in {1..120}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/)
-            if [ "$code" != "000" ]; then break; fi
+
+          # Wait for :5000 to accept TCP
+          for i in {1..180}; do
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/ | grep -q '^[0-9][0-9][0-9]$'; then
+              break
+            fi
+            # show if node died
+            if ! ps -p $API_PID >/dev/null 2>&1; then
+              echo "API process exited before binding; logs:"
+              sed -n '1,400p' api.out || true
+              exit 1
+            fi
             sleep 2
           done
-          if [ "$code" = "000" ]; then
-            echo "API didn't open port 5000"; sed -n '1,300p' api.out || true; exit 1
+
+          # fail if still not listening
+          if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/ | grep -q '^[0-9][0-9][0-9]$'; then
+            echo "API didn't open port 5000 in time; logs:"
+            sed -n '1,400p' api.out || true
+            exit 1
           fi
 
           # Register (idempotent)
@@ -91,12 +105,9 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
 
-        shell: bash
+          # Teardown
+          kill $API_PID 2>/dev/null || true
 
       - name: Print API log on failure
         if: failure()
-        run: sed -n '1,300p' api.out || true
-
-      - name: Teardown API
-        if: always()
-        run: kill $(cat api.pid) 2>/dev/null || true
+        run: sed -n '1,400p' api.out || true

@@ -11,6 +11,13 @@ const cors = require('cors');
 app.use(cors());
 app.use(express.json());
 
+process.on('uncaughtException', (err) => {
+  console.error('UncaughtException:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('UnhandledRejection:', err);
+});
+
 // Read env vars with sane defaults
 const {
   NODE_ENV = 'development',
