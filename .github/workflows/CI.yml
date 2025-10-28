@@ -1,4 +1,4 @@
-name: simple-prod-e2e
+name: dev-e2e
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 jobs:
-  e2e:
+  e2e-dev:
     runs-on: ubuntu-latest
     env:
       JWT_ACCESS_SECRET: test-access-secret
@@ -25,7 +25,7 @@ jobs:
       - name: Write CI env (use CI Mongo)
         run: |
           cat > .env << 'EOF'
-          NODE_ENV=production
+          NODE_ENV=development
           PORT=5000
           MONGODB_URI=mongodb://root:rootpass@mongo:27017/ci_db?authSource=admin
           JWT_ACCESS_SECRET=${{ env.JWT_ACCESS_SECRET }}
@@ -33,29 +33,30 @@ jobs:
           ACCESS_TOKEN_TTL=${{ env.ACCESS_TOKEN_TTL }}
           EOF
 
-      - name: Start stack (prod + ci)
+      - name: Start dev stack (api-dev + client-dev not needed)
         run: |
-          export COMPOSE_PROFILES="prod,ci"
-          docker compose up -d --build
+          export COMPOSE_PROFILES="dev,ci"
+          # Only start api-dev and mongo to keep things fast and simple
+          docker compose up -d --build mongo api-dev
 
-      - name: Wait for site root at :8080 (no health check)
+      - name: Wait for API :5000 (no healthcheck)
         run: |
-          for i in {1..60}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
+          for i in {1..90}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/)
             if [ "$code" != "000" ]; then exit 0; fi
             sleep 2
           done
-          echo "Timed out waiting for Nginx root"; exit 1
+          echo "Timed out waiting for api-dev"; exit 1
 
       - name: Register (idempotent)
         run: |
-          curl -i -sS -X POST http://localhost:8080/api/register \
+          curl -i -sS -X POST http://localhost:5000/api/register \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
 
       - name: Login (assert tokens)
         run: |
-          R=$(curl -sS -X POST http://localhost:8080/api/login \
+          R=$(curl -sS -X POST http://localhost:5000/api/login \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass"}')
           echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
@@ -66,7 +67,7 @@ jobs:
 
       - name: Refresh -> new tokens
         run: |
-          R=$(curl -sS -X POST http://localhost:8080/api/refresh \
+          R=$(curl -sS -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}")
           echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
@@ -77,21 +78,21 @@ jobs:
 
       - name: Logout invalidates old refresh
         run: |
-          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/logout \
+          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/logout \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^200$"
-          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/refresh \
+          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
 
       - name: Show logs on failure
         if: failure()
         run: |
-          docker compose logs --no-color api || true
-          docker compose logs --no-color client || true
+          docker compose logs --no-color api-dev || true
+          docker compose logs --no-color mongo || true
 
       - name: Teardown
         if: always()
         run: |
-          export COMPOSE_PROFILES="prod,ci"
+          export COMPOSE_PROFILES="dev,ci"
           docker compose down -v
