@@ -1,4 +1,4 @@
-name: simple-e2e
+name: e2e-auth-and-db
 
 on:
   pull_request:
@@ -8,15 +8,21 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [dev, prod]
+
     env:
       JWT_ACCESS_SECRET: test-access-secret
       JWT_REFRESH_SECRET: test-refresh-secret
       ACCESS_TOKEN_TTL: 20s
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
@@ -32,63 +38,80 @@ jobs:
           ACCESS_TOKEN_TTL=${{ env.ACCESS_TOKEN_TTL }}
           EOF
 
-      - name: Start stack (prod + ci)
+      - name: Start stack with Compose
         run: |
-          if [ "${{ matrix.profile }}" = "dev" ]; then
-            export COMPOSE_PROFILES="dev,ci"
-            BASE="http://localhost:5000"
-          else
-            export COMPOSE_PROFILES="prod,ci"
-            BASE="http://localhost:8080"
-          fi
-          echo "BASE=$BASE" >> $GITHUB_ENV
+          export COMPOSE_PROFILES="prod,ci"
           docker compose up -d --build
 
-      - name: Wait for readiness
+      - name: Wait for Nginx at :8080
         run: |
-          set -e
           for i in {1..60}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE")
-            if [ "$code" != "000" ]; then break; fi
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
+            if [ "$code" = "200" ]; then exit 0; fi
             sleep 2
           done
+          echo "Timed out waiting for Nginx"; exit 1
 
-      - name: Register (idempotent)
+      - name: Register user (idempotent)
         run: |
-          curl -i -sS -X POST http://localhost:8080/api/register \
+          curl -i -sS -X POST "$BASE/api/register" \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
 
-      - name: Login (assert tokens)
+      - name: Login and capture tokens
         run: |
-          R=$(curl -sS -X POST http://localhost:8080/api/login \
+          R=$(curl -sS -X POST "$BASE/api/login" \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass"}')
-          echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
+          echo "$R" | jq -e '.accessToken,.refreshToken' > /dev/null
           AT=$(echo "$R" | jq -r '.accessToken')
           RT=$(echo "$R" | jq -r '.refreshToken')
           echo "AT=$AT" >> $GITHUB_ENV
           echo "RT=$RT" >> $GITHUB_ENV
 
-      - name: Refresh -> new tokens
+      - name: Negative login (bad password -> 400)
         run: |
-          R=$(curl -sS -X POST http://localhost:8080/api/refresh \
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/login" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"ciuser","password":"wrong"}')
+          [ "$code" = "400" ]
+
+      - name: Refresh token -> new pair
+        run: |
+          R=$(curl -sS -X POST "$BASE/api/refresh" \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}")
-          echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
+          echo "$R" | jq -e '.accessToken,.refreshToken' > /dev/null
           NAT=$(echo "$R" | jq -r '.accessToken')
           NRT=$(echo "$R" | jq -r '.refreshToken')
           test "$NAT" != "$AT"
           test "$NRT" != "$RT"
+          echo "AT=$NAT" >> $GITHUB_ENV
+          echo "RT=$NRT" >> $GITHUB_ENV
 
-      - name: Logout invalidates old refresh
+      - name: Refresh missing token -> 401
         run: |
-          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/logout \
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" -d '{}')
+          [ "$code" = "401" ]
+
+      - name: Refresh invalid token -> 403
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
             -H "Content-Type: application/json" \
-            -d "{\"token\":\"${RT}\"}" | grep -q "^200$"
-          curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/refresh \
+            -d '{"token":"not-a-real-token"}')
+          [ "$code" = "403" ]
+
+      - name: Logout invalidates prior refresh
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/logout" \
             -H "Content-Type: application/json" \
-            -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
+            -d "{\"token\":\"${RT}\"}")
+          [ "$code" = "200" ]
+          code2=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/refresh" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"${RT}\"}")
+          [ "$code2" = "403" ]
 
       - name: Show logs on failure
         if: failure()
@@ -99,5 +122,9 @@ jobs:
       - name: Teardown
         if: always()
         run: |
-          export COMPOSE_PROFILES="prod,ci"
+          if [ "${{ matrix.profile }}" = "dev" ]; then
+            export COMPOSE_PROFILES="dev,ci"
+          else
+            export COMPOSE_PROFILES="prod,ci"
+          fi
           docker compose down -v
