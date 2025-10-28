@@ -27,6 +27,13 @@ services:
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ACCESS_TOKEN_TTL=${ACCESS_TOKEN_TTL:-20s}
+    # Distroless healthcheck: use Node to fetch /api/health and exit 0 on 200
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5000/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
 
   # Production client (Nginx)
   client:
@@ -36,7 +43,8 @@ services:
       dockerfile: Dockerfile
       target: prod
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "8080:80"
 
