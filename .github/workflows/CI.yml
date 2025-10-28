@@ -9,6 +9,7 @@ jobs:
   e2e-dev:
     runs-on: ubuntu-latest
     env:
+      COMPOSE_PROFILES: dev,ci
       JWT_ACCESS_SECRET: test-access-secret
       JWT_REFRESH_SECRET: test-refresh-secret
       ACCESS_TOKEN_TTL: 20s
@@ -45,7 +46,7 @@ jobs:
 
       - name: Wait for API :5000 (no healthcheck)
         run: |
-          for i in {1..90}; do
+          for i in {1..120}; do
             code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/)
             if [ "$code" != "000" ]; then exit 0; fi
             sleep 2
