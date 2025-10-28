@@ -31,15 +31,31 @@ if (!JWT_ACCESS_SECRET || !JWT_REFRESH_SECRET) {
   process.exit(1);
 }
 
-// Connect to MongoDB (Atlas/local) using env URI
-mongoose.connect(MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-}).then(() => console.log("MongoDB connected"))
-  .catch((err) => {
-    console.error("MongoDB connection error:", err);
-    process.exit(1);
-  });
+// Retry Mongo connect instead of exiting once
+const connectWithRetry = async (retries = 10, delayMs = 2000) => {
+  for (let i = 1; i <= retries; i++) {
+    try {
+      await mongoose.connect(MONGODB_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+      });
+      console.log("MongoDB connected");
+      return;
+    } catch (err) {
+      console.error(`Mongo connect failed (attempt ${i}/${retries}):`, err.message);
+      if (i === retries) process.exit(1);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+};
+connectWithRetry();
+
+// Health endpoint (200 only when DB ready)
+app.get("/api/health", (req, res) => {
+  const ready = mongoose.connection.readyState === 1; // 1 = connected
+  if (ready) return res.status(200).json({ status: "ok" });
+  return res.status(503).json({ status: "starting" });
+});
 
 // Define User schema and model
 const userSchema = new mongoose.Schema({

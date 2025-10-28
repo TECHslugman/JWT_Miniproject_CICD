@@ -47,17 +47,19 @@ jobs:
             export COMPOSE_PROFILES="prod,ci"
             BASE="http://localhost:8080"
           fi
+          HEALTH_URL="$BASE/api/health"
           echo "BASE=$BASE" >> $GITHUB_ENV
+          echo "HEALTH_URL=$HEALTH_URL" >> $GITHUB_ENV
           docker compose up -d --build
 
-      - name: Wait for readiness
+      - name: Wait for API health
         run: |
-          set -e
-          for i in {1..60}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE")
-            if [ "$code" != "000" ]; then break; fi
+          for i in {1..90}; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL")
+            if [ "$code" = "200" ]; then exit 0; fi
             sleep 2
           done
+          echo "Timed out waiting for API health"; exit 1
 
       - name: Register user (idempotent)
         run: |
