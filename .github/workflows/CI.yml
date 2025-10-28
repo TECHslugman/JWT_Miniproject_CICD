@@ -1,4 +1,4 @@
-name: dev-e2e-no-compose
+name: Test Case for dev environment
 
 on:
   pull_request:
