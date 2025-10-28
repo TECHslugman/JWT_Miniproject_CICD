@@ -1,4 +1,5 @@
 services:
+  # CI-only MongoDB
   mongo:
     profiles: ["ci"]
     image: mongo:7
@@ -6,12 +7,9 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: rootpass
-    # ports: ["27017:27017"]  # optional in CI; Compose DNS is enough
+    # ports: ["27017:27017"] # optional in CI
     volumes:
       - mongo_data:/data/db
-
-volumes:
-  mongo_data:
 
   # Production API (distroless runtime)
   api:
@@ -29,8 +27,9 @@ volumes:
       - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - ACCESS_TOKEN_TTL=${ACCESS_TOKEN_TTL:-20s}
-    # Keep API internal; Nginx proxies /api to this service
-    # ports: ["5000:5000"]
+    # API stays internal; Nginx proxies /api to this service
+    # ports:
+    #   - "5000:5000"
 
   # Production client (Nginx)
   client:
@@ -66,8 +65,7 @@ volumes:
     ports:
       - "5000:5000"
 
-  # Development client (Vite)
-    # Development client (Vite)
+  # Development client (CRA)
   client-dev:
     profiles: ["dev"]
     build:
@@ -82,3 +80,6 @@ volumes:
       - /app/node_modules
     ports:
       - "3000:3000"
+
+volumes:
+  mongo_data:
