@@ -12,6 +12,8 @@ jobs:
       JWT_ACCESS_SECRET: test-access-secret
       JWT_REFRESH_SECRET: test-refresh-secret
       ACCESS_TOKEN_TTL: 20s
+      # Force CI Mongo URI to override any env_file values
+      MONGODB_URI: mongodb://root:rootpass@mongo:27017/ci_db?authSource=admin
 
     steps:
       - name: Checkout
@@ -22,22 +24,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Write CI env (use CI Mongo)
+      - name: Write CI env (fallbacks; shell env overrides these)
         run: |
           cat > .env << 'EOF'
           NODE_ENV=development
           PORT=5000
-          MONGODB_URI=mongodb://root:rootpass@mongo:27017/ci_db?authSource=admin
+          # MONGODB_URI provided by job env to ensure override in CI
           JWT_ACCESS_SECRET=${{ env.JWT_ACCESS_SECRET }}
           JWT_REFRESH_SECRET=${{ env.JWT_REFRESH_SECRET }}
           ACCESS_TOKEN_TTL=${{ env.ACCESS_TOKEN_TTL }}
           EOF
 
-      - name: Start dev stack (api-dev + client-dev not needed)
+      - name: Start dev stack (mongo + api-dev)
         run: |
           export COMPOSE_PROFILES="dev,ci"
-          # Only start api-dev and mongo to keep things fast and simple
           docker compose up -d --build mongo api-dev
+
+      - name: Show rendered compose (debug)
+        run: docker compose config | sed -n '1,200p'
 
       - name: Wait for API :5000 (no healthcheck)
         run: |
