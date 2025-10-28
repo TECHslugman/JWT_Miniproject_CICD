@@ -1,4 +1,4 @@
-name: dev-e2e-no-compose
+name: Auth validation workflow
 
 on:
   pull_request:
@@ -44,50 +44,51 @@ jobs:
           sudo apt-get install -y jq
           cd api && npm ci
 
-      - name: Start API + test + teardown (single step)
+      - name: Start API + tests + summary
         run: |
           set -euo pipefail
           cd api
-          # run in foreground in a subshell so we can tail logs if it dies
-          ( node --trace-uncaught index.js ) > ../api.out 2>&1 &
-          API_PID=$!
+          ( node --trace-uncaught index.js ) > ../api.out 2>&1 & API_PID=$!
           cd ..
 
-          # Wait for :5000 to accept TCP
+          echo "## Auth E2E Results" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::group::Wait for API :5000"
           for i in {1..180}; do
             if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/ | grep -q '^[0-9][0-9][0-9]$'; then
               break
             fi
-            # show if node died
-            if ! ps -p $API_PID >/dev/null 2>&1; then
-              echo "API process exited before binding; logs:"
-              sed -n '1,400p' api.out || true
+            if ! ps -p "$API_PID" >/dev/null 2>&1; then
+              echo "API exited before binding; recent logs:"
+              sed -n '1,200p' api.out || true
+              echo "- ❌ API failed to start" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
             sleep 2
           done
+          echo "::endgroup::"
+          echo "- ✅ API listening on :5000" >> "$GITHUB_STEP_SUMMARY"
 
-          # fail if still not listening
-          if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/ | grep -q '^[0-9][0-9][0-9]$'; then
-            echo "API didn't open port 5000 in time; logs:"
-            sed -n '1,400p' api.out || true
-            exit 1
-          fi
-
-          # Register (idempotent)
+          echo "::group::Register"
           curl -i -sS -X POST http://localhost:5000/api/register \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
+          echo "::endgroup::"
+          echo "- ✅ Register (idempotent)" >> "$GITHUB_STEP_SUMMARY"
 
-          # Login (assert tokens)
+          echo "::group::Login"
           R=$(curl -sS -X POST http://localhost:5000/api/login \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass"}')
           echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
           AT=$(echo "$R" | jq -r '.accessToken')
           RT=$(echo "$R" | jq -r '.refreshToken')
+          echo "::add-mask::$AT"
+          echo "::add-mask::$RT"
+          echo "::endgroup::"
+          echo "- ✅ Login (tokens issued)" >> "$GITHUB_STEP_SUMMARY"
 
-          # Refresh -> new tokens
+          echo "::group::Refresh"
           R=$(curl -sS -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}")
@@ -96,17 +97,22 @@ jobs:
           NRT=$(echo "$R" | jq -r '.refreshToken')
           test "$NAT" != "$AT"
           test "$NRT" != "$RT"
+          echo "::add-mask::$NAT"
+          echo "::add-mask::$NRT"
+          echo "::endgroup::"
+          echo "- ✅ Refresh (rotated tokens)" >> "$GITHUB_STEP_SUMMARY"
 
-          # Logout invalidates old refresh
+          echo "::group::Logout + verify invalidation"
           curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/logout \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^200$"
           curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
+          echo "::endgroup::"
+          echo "- ✅ Logout invalidated prior refresh" >> "$GITHUB_STEP_SUMMARY"
 
-          # Teardown
-          kill $API_PID 2>/dev/null || true
+          kill "$API_PID" 2>/dev/null || true
 
       - name: Print API log on failure
         if: failure()
