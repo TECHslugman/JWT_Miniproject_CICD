@@ -50,9 +50,9 @@ const connectWithRetry = async (retries = 10, delayMs = 2000) => {
 };
 connectWithRetry();
 
-// Health endpoint (200 only when DB ready)
+// Optional: Health endpoint
 app.get("/api/health", (req, res) => {
-  const ready = mongoose.connection.readyState === 1; // 1 = connected
+  const ready = mongoose.connection.readyState === 1;
   if (ready) return res.status(200).json({ status: "ok" });
   return res.status(503).json({ status: "starting" });
 });
@@ -68,20 +68,12 @@ const User = mongoose.model("User", userSchema);
 // In-memory refresh token store (for demo/dev)
 let refreshTokens = [];
 
-// Token helpers use env-based secrets and TTLs
-const generateAccessToken = (user) => {
-  return jwt.sign(
-    { id: user._id, isAdmin: user.isAdmin },
-    JWT_ACCESS_SECRET,
-    { expiresIn: ACCESS_TOKEN_TTL }
-  );
-};
-const generateRefreshToken = (user) => {
-  return jwt.sign(
-    { id: user._id, isAdmin: user.isAdmin },
-    JWT_REFRESH_SECRET
-  );
-};
+// Token helpers
+const generateAccessToken = (user) =>
+  jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_ACCESS_SECRET, { expiresIn: ACCESS_TOKEN_TTL });
+
+const generateRefreshToken = (user) =>
+  jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_REFRESH_SECRET);
 
 // Register
 app.post("/api/register", async (req, res) => {
