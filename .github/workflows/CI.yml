@@ -17,7 +17,6 @@ jobs:
           MONGO_INITDB_ROOT_PASSWORD: rootpass
         ports:
           - 27017:27017
-        # Health for reliability; doesn't add app healthchecks
         options: >-
           --health-cmd="mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
           --health-interval=5s
@@ -33,11 +32,9 @@ jobs:
       ACCESS_TOKEN_TTL: 20s
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
@@ -45,44 +42,38 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
-          cd api
-          npm ci
+          cd api && npm ci
 
-      - name: Start API (background)
+      - name: Start API, wait, run tests, teardown
         run: |
+          set -euo pipefail
           cd api
-          # run plain node to avoid nodemon in CI
-          nohup node index.js > ../api.out 2>&1 &
-          echo $! > ../api.pid
-
-      - name: Wait for :5000 (no healthcheck)
-        run: |
+          node index.js > ../api.out 2>&1 & echo $! > ../api.pid
+          cd ..
+          # Wait for port 5000 to accept TCP (no healthcheck)
           for i in {1..120}; do
             code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/)
-            if [ "$code" != "000" ]; then exit 0; fi
+            if [ "$code" != "000" ]; then break; fi
             sleep 2
           done
-          echo "Timed out waiting for API on :5000"; exit 1
+          if [ "$code" = "000" ]; then
+            echo "API didn't open port 5000"; sed -n '1,300p' api.out || true; exit 1
+          fi
 
-      - name: Register (idempotent)
-        run: |
+          # Register (idempotent)
           curl -i -sS -X POST http://localhost:5000/api/register \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
 
-      - name: Login (assert tokens)
-        run: |
+          # Login (assert tokens)
           R=$(curl -sS -X POST http://localhost:5000/api/login \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass"}')
           echo "$R" | jq -e '.accessToken,.refreshToken' >/dev/null
           AT=$(echo "$R" | jq -r '.accessToken')
           RT=$(echo "$R" | jq -r '.refreshToken')
-          echo "AT=$AT" >> $GITHUB_ENV
-          echo "RT=$RT" >> $GITHUB_ENV
 
-      - name: Refresh -> new tokens
-        run: |
+          # Refresh -> new tokens
           R=$(curl -sS -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}")
@@ -92,8 +83,7 @@ jobs:
           test "$NAT" != "$AT"
           test "$NRT" != "$RT"
 
-      - name: Logout invalidates old refresh
-        run: |
+          # Logout invalidates old refresh
           curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/logout \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^200$"
@@ -101,12 +91,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
 
+        shell: bash
+
       - name: Print API log on failure
         if: failure()
-        run: |
-          sed -n '1,300p' api.out || true
+        run: sed -n '1,300p' api.out || true
 
       - name: Teardown API
         if: always()
-        run: |
-          kill $(cat api.pid) 2>/dev/null || true
+        run: kill $(cat api.pid) 2>/dev/null || true
