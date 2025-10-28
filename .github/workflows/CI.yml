@@ -1,4 +1,4 @@
-name: dev-e2e
+name: dev-e2e-no-compose
 
 on:
   pull_request:
@@ -8,50 +8,61 @@ on:
 jobs:
   e2e-dev:
     runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: rootpass
+        ports:
+          - 27017:27017
+        # Health for reliability; doesn't add app healthchecks
+        options: >-
+          --health-cmd="mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+
     env:
-      COMPOSE_PROFILES: dev,ci
+      NODE_ENV: development
+      PORT: 5000
+      MONGODB_URI: mongodb://root:rootpass@localhost:27017/ci_db?authSource=admin
       JWT_ACCESS_SECRET: test-access-secret
       JWT_REFRESH_SECRET: test-refresh-secret
       ACCESS_TOKEN_TTL: 20s
-      # Force CI Mongo URI to override any env_file values
-      MONGODB_URI: mongodb://root:rootpass@mongo:27017/ci_db?authSource=admin
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install jq and api deps
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
+          cd api
+          npm ci
 
-      - name: Write CI env (fallbacks; shell env overrides these)
+      - name: Start API (background)
         run: |
-          cat > .env << 'EOF'
-          NODE_ENV=development
-          PORT=5000
-          # MONGODB_URI provided by job env to ensure override in CI
-          JWT_ACCESS_SECRET=${{ env.JWT_ACCESS_SECRET }}
-          JWT_REFRESH_SECRET=${{ env.JWT_REFRESH_SECRET }}
-          ACCESS_TOKEN_TTL=${{ env.ACCESS_TOKEN_TTL }}
-          EOF
+          cd api
+          # run plain node to avoid nodemon in CI
+          nohup node index.js > ../api.out 2>&1 &
+          echo $! > ../api.pid
 
-      - name: Start dev stack (mongo + api-dev)
-        run: |
-          export COMPOSE_PROFILES="dev,ci"
-          docker compose up -d --build mongo api-dev
-
-      - name: Show rendered compose (debug)
-        run: docker compose config | sed -n '1,200p'
-
-      - name: Wait for API :5000 (no healthcheck)
+      - name: Wait for :5000 (no healthcheck)
         run: |
           for i in {1..120}; do
             code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/)
             if [ "$code" != "000" ]; then exit 0; fi
             sleep 2
           done
-          echo "Timed out waiting for api-dev"; exit 1
+          echo "Timed out waiting for API on :5000"; exit 1
 
       - name: Register (idempotent)
         run: |
@@ -90,14 +101,12 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
 
-      - name: Show logs on failure
+      - name: Print API log on failure
         if: failure()
         run: |
-          docker compose logs --no-color api-dev || true
-          docker compose logs --no-color mongo || true
+          sed -n '1,300p' api.out || true
 
-      - name: Teardown
+      - name: Teardown API
         if: always()
         run: |
-          export COMPOSE_PROFILES="dev,ci"
-          docker compose down -v
+          kill $(cat api.pid) 2>/dev/null || true
