@@ -1,4 +1,4 @@
-name: Auth validation workflow
+name: dev-e2e-no-compose
 
 on:
   pull_request:
@@ -32,51 +32,61 @@ jobs:
       ACCESS_TOKEN_TTL: 20s
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install jq and api deps
+      - name: Install jq and API deps
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y jq
-          cd api && npm ci
+          cd api
+          npm ci
+          echo "## Auth E2E Results" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Start API + tests + summary
+      - name: Start API (background)
         run: |
           set -euo pipefail
           cd api
-          ( node --trace-uncaught index.js ) > ../api.out 2>&1 & API_PID=$!
+          ( node --trace-uncaught index.js ) > ../api.out 2>&1 & echo $! > ../api.pid
           cd ..
+          echo "API_PID=$(cat api.pid)" >> "$GITHUB_ENV"
 
-          echo "## Auth E2E Results" >> "$GITHUB_STEP_SUMMARY"
-
-          echo "::group::Wait for API :5000"
+      - name: Wait for API :5000
+        run: |
+          set -euo pipefail
           for i in {1..180}; do
             if curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/ | grep -q '^[0-9][0-9][0-9]$'; then
-              break
+              echo "- ✅ API listening on :5000" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
             if ! ps -p "$API_PID" >/dev/null 2>&1; then
-              echo "API exited before binding; recent logs:"
-              sed -n '1,200p' api.out || true
+              echo "API exited before binding; recent logs:"; sed -n '1,200p' api.out || true
               echo "- ❌ API failed to start" >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
             sleep 2
           done
-          echo "::endgroup::"
-          echo "- ✅ API listening on :5000" >> "$GITHUB_STEP_SUMMARY"
+          echo "Timed out waiting for API"; sed -n '1,200p' api.out || true
+          echo "- ❌ API timed out" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
-          echo "::group::Register"
+      - name: Register
+        run: |
+          set -euo pipefail
           curl -i -sS -X POST http://localhost:5000/api/register \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass","isAdmin":false}' || true
-          echo "::endgroup::"
           echo "- ✅ Register (idempotent)" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "::group::Login"
+      - name: Login
+        run: |
+          set -euo pipefail
           R=$(curl -sS -X POST http://localhost:5000/api/login \
             -H "Content-Type: application/json" \
             -d '{"username":"ciuser","password":"cipass"}')
@@ -85,10 +95,13 @@ jobs:
           RT=$(echo "$R" | jq -r '.refreshToken')
           echo "::add-mask::$AT"
           echo "::add-mask::$RT"
-          echo "::endgroup::"
+          echo "AT=$AT" >> "$GITHUB_ENV"
+          echo "RT=$RT" >> "$GITHUB_ENV"
           echo "- ✅ Login (tokens issued)" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "::group::Refresh"
+      - name: Refresh
+        run: |
+          set -euo pipefail
           R=$(curl -sS -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}")
@@ -99,19 +112,25 @@ jobs:
           test "$NRT" != "$RT"
           echo "::add-mask::$NAT"
           echo "::add-mask::$NRT"
-          echo "::endgroup::"
+          echo "AT=$NAT" >> "$GITHUB_ENV"
+          echo "RT=$NRT" >> "$GITHUB_ENV"
           echo "- ✅ Refresh (rotated tokens)" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "::group::Logout + verify invalidation"
+      - name: Logout + verify invalidation
+        run: |
+          set -euo pipefail
           curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/logout \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^200$"
           curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:5000/api/refresh \
             -H "Content-Type: application/json" \
             -d "{\"token\":\"${RT}\"}" | grep -q "^403$"
-          echo "::endgroup::"
           echo "- ✅ Logout invalidated prior refresh" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Teardown API
+        if: always()
+        run: |
+          set -euo pipefail
           kill "$API_PID" 2>/dev/null || true
 
       - name: Print API log on failure
