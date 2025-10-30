@@ -8,4 +8,3 @@ prod
 docker compose --profile prod up -d --build
 docker compose --profile prod down
 http://localhost:8080/login
-

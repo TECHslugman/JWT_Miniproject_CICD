@@ -29,7 +29,7 @@ services:
       - ACCESS_TOKEN_TTL=${ACCESS_TOKEN_TTL:-20s}
     # Distroless healthcheck: use Node to fetch /api/health and exit 0 on 200
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:5000/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "curl -f ('http://localhost:5000/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 30
